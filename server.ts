@@ -26,6 +26,7 @@ interface RelayFile {
   size: number;
   filePath: string;
   expiry: number;
+  status: "active" | "downloaded";
 }
 
 const relayStore = new Map<string, RelayFile>(); // PIN -> RelayFile
@@ -87,6 +88,7 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
     size: req.file.size,
     filePath: req.file.path,
     expiry: Date.now() + 10 * 60 * 1000, // 10 minutes from now
+    status: "active",
   };
 
   relayStore.set(pin, fileData);
@@ -99,12 +101,19 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
   });
 });
 
+app.get("/api/status/:pin", (req, res) => {
+  const { pin } = req.params;
+  const file = relayStore.get(pin);
+  if (!file) return res.json({ status: "not_found" });
+  res.json({ status: file.status });
+});
+
 app.get("/api/info/:pin", (req, res) => {
   const { pin } = req.params;
   const file = relayStore.get(pin);
 
-  if (!file) {
-    return res.status(404).json({ error: "File not found or expired" });
+  if (!file || file.status === "downloaded") {
+    return res.status(404).json({ error: "File not found or already downloaded" });
   }
 
   if (Date.now() > file.expiry) {
@@ -119,6 +128,7 @@ app.get("/api/info/:pin", (req, res) => {
     fileName: file.originalName,
     size: file.size,
     expiry: file.expiry,
+    mimeType: file.mimeType,
   });
 });
 
@@ -126,7 +136,7 @@ app.get("/api/download/:pin", (req, res) => {
   const { pin } = req.params;
   const file = relayStore.get(pin);
 
-  if (!file) {
+  if (!file || file.status === "downloaded") {
     return res.status(404).json({ error: "File not found or expired" });
   }
 
@@ -137,12 +147,21 @@ app.get("/api/download/:pin", (req, res) => {
       return;
     }
 
-    // Delete after successful download
-    console.log(`File downloaded and deleted: ${file.originalName} (${pin})`);
-    if (fs.existsSync(file.filePath)) {
-      fs.unlinkSync(file.filePath);
-    }
-    relayStore.delete(pin);
+    // Mark as downloaded
+    file.status = "downloaded";
+    console.log(`File marked as downloaded: ${file.originalName} (${pin})`);
+    
+    // Delete after 10 seconds grace period
+    setTimeout(() => {
+      if (relayStore.has(pin)) {
+        const f = relayStore.get(pin)!;
+        if (fs.existsSync(f.filePath)) {
+          fs.unlinkSync(f.filePath);
+        }
+        relayStore.delete(pin);
+        console.log(`File physically deleted after grace period: ${f.originalName} (${pin})`);
+      }
+    }, 10000);
   });
 });
 
