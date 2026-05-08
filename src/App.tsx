@@ -3,7 +3,7 @@ import {
   Upload, Download, Timer, CheckCircle, AlertCircle, 
   Loader2, ArrowRight, FileText, 
   Image as ImageIcon, Film, Smartphone, Copy, Check, Globe,
-  FileSpreadsheet, Archive, Music, FileCode
+  FileSpreadsheet, Archive, Music, FileCode, Presentation
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { QRCodeCanvas } from "qrcode.react";
@@ -21,6 +21,7 @@ interface FileInfo {
 
 export default function App() {
   const [state, setState] = useState<AppState>("IDLE");
+  const [role, setRole] = useState<"SENDER" | "RECEIVER" | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
@@ -105,6 +106,7 @@ export default function App() {
 
   const handleUpload = async (file: File) => {
     setState("UPLOADING");
+    setRole("SENDER");
     setUploadProgress(0);
     setErrorMsg("");
 
@@ -153,6 +155,7 @@ export default function App() {
     }
 
     setState("LOCATING");
+    setRole("RECEIVER");
     setErrorMsg("");
 
     try {
@@ -214,13 +217,14 @@ export default function App() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      setState("DELIVERED");
-      
-      setTimeout(() => {
-        setState("IDLE");
-        setFileInfo(null);
-        setReceiverPin("");
-      }, 5000);
+    setState("DELIVERED");
+    
+    setTimeout(() => {
+      setState("IDLE");
+      setRole(null);
+      setFileInfo(null);
+      setReceiverPin("");
+    }, 5000);
 
     } catch (err) {
       setState("ERROR");
@@ -283,22 +287,50 @@ export default function App() {
     } else if (
       mimeType?.includes("spreadsheet") || 
       mimeType?.includes("excel") || 
-      fileName.endsWith(".csv")
+      mimeType?.includes("sheet") ||
+      fileName.toLowerCase().endsWith(".csv") ||
+      fileName.toLowerCase().endsWith(".xlsx") ||
+      fileName.toLowerCase().endsWith(".xls")
     ) {
       Icon = FileSpreadsheet;
       label = "SPREADSHEET";
       color = "bg-emerald-200";
     } else if (
+      mimeType?.includes("presentation") || 
+      mimeType?.includes("powerpoint") ||
+      fileName.toLowerCase().endsWith(".pptx") ||
+      fileName.toLowerCase().endsWith(".ppt")
+    ) {
+      Icon = Presentation;
+      label = "PRESENTATION";
+      color = "bg-indigo-200";
+    } else if (
+      mimeType?.includes("word") || 
+      mimeType?.includes("officedocument.wordprocessingml") ||
+      fileName.toLowerCase().endsWith(".docx") ||
+      fileName.toLowerCase().endsWith(".doc") ||
+      fileName.toLowerCase().endsWith(".txt") ||
+      fileName.toLowerCase().endsWith(".rtf")
+    ) {
+      Icon = FileText;
+      label = "DOCUMENT / TEXT";
+      color = "bg-stone-200";
+    } else if (
       mimeType?.includes("zip") || 
       mimeType?.includes("compressed") || 
       mimeType?.includes("archive") ||
-      fileName.endsWith(".rar") || 
-      fileName.endsWith(".7z")
+      mimeType?.includes("x-tar") ||
+      mimeType?.includes("x-rar") ||
+      fileName.toLowerCase().endsWith(".zip") ||
+      fileName.toLowerCase().endsWith(".rar") || 
+      fileName.toLowerCase().endsWith(".7z") ||
+      fileName.toLowerCase().endsWith(".tar") ||
+      fileName.toLowerCase().endsWith(".gz")
     ) {
       Icon = Archive;
       label = "ARCHIVE";
       color = "bg-orange-200";
-    } else if (mimeType?.startsWith("audio/")) {
+    } else if (mimeType?.startsWith("audio/") || fileName.toLowerCase().endsWith(".mp3") || fileName.toLowerCase().endsWith(".wav") || fileName.toLowerCase().endsWith(".m4a")) {
       Icon = Music;
       label = "AUDIO FILE";
       color = "bg-pink-200";
@@ -308,11 +340,14 @@ export default function App() {
       mimeType?.includes("html") || 
       mimeType?.includes("css") || 
       mimeType?.includes("json") ||
-      fileName.endsWith(".ts") ||
-      fileName.endsWith(".tsx") ||
-      fileName.endsWith(".js") ||
-      fileName.endsWith(".jsx") ||
-      fileName.endsWith(".py")
+      fileName.toLowerCase().endsWith(".ts") ||
+      fileName.toLowerCase().endsWith(".tsx") ||
+      fileName.toLowerCase().endsWith(".js") ||
+      fileName.toLowerCase().endsWith(".jsx") ||
+      fileName.toLowerCase().endsWith(".py") ||
+      fileName.toLowerCase().endsWith(".c") ||
+      fileName.toLowerCase().endsWith(".cpp") ||
+      fileName.toLowerCase().endsWith(".java")
     ) {
       Icon = FileCode;
       label = "SOURCE CODE";
@@ -358,6 +393,9 @@ export default function App() {
             Relay
             <div className="absolute -top-4 -right-8 text-4xl rotate-12 text-brand-red">✦</div>
           </motion.h1>
+          <div className="font-black text-xs sm:text-sm uppercase tracking-[0.3em] opacity-40">
+             Product by Vilas K.R.
+          </div>
           <p className="font-bold text-xl opacity-60 max-w-sm mx-auto">
             Tactile, temporary, and internet-native file transfer.
           </p>
@@ -562,7 +600,10 @@ export default function App() {
                 </div>
 
                 <button 
-                  onClick={() => setState("IDLE")}
+                  onClick={() => {
+                    setState("IDLE");
+                    setRole(null);
+                  }}
                   className="w-full text-center font-black uppercase underline p-6 hover:text-brand-red transition-colors text-xl"
                 >
                   Create another Relay
@@ -596,7 +637,10 @@ export default function App() {
                       <span>Download Now</span>
                     </button>
                     <button 
-                      onClick={() => setState("IDLE")}
+                      onClick={() => {
+                        setState("IDLE");
+                        setRole(null);
+                      }}
                       className="font-black uppercase underline opacity-40 hover:opacity-100 transition-opacity p-2 text-sm"
                     >
                       Cancel
@@ -659,7 +703,7 @@ export default function App() {
                 </motion.div>
                 
                 <h2 className="text-4xl sm:text-7xl font-black uppercase italic tracking-tighter leading-tight">
-                  ✓ FILE<br />DELIVERED
+                  ✓ FILE<br />{role === "SENDER" ? "DELIVERED" : "RECEIVED"}
                 </h2>
                 
                 <motion.div 
@@ -697,6 +741,7 @@ export default function App() {
                 <button 
                   onClick={() => {
                     setState("IDLE");
+                    setRole(null);
                     setErrorMsg("");
                   }}
                   className="brutal-button w-full bg-white h-16 sm:h-20 text-xl sm:text-2xl uppercase"
@@ -719,7 +764,10 @@ export default function App() {
                <div className="w-1.5 h-1.5 bg-black rounded-full" />
                <span>Ephemeral</span>
              </div>
-             <p className="font-black text-xs opacity-20">EST. 2026 • RELAY SYSTEMS INC.</p>
+             <div className="flex flex-col items-center gap-1">
+               <p className="font-black text-xs opacity-40">© 2026 VILAS K.R. ALL RIGHTS RESERVED.</p>
+               <p className="font-black text-[10px] opacity-20 uppercase tracking-widest">Relay Systems Infrastructure • Encryption Grade A1</p>
+             </div>
           </div>
         </footer>
       </div>
