@@ -23,6 +23,10 @@ import {
   uploadBytesResumable, 
   getDownloadURL 
 } from "firebase/storage";
+import { 
+  signInAnonymously,
+  onAuthStateChanged 
+} from "firebase/auth";
 import { db, storage, auth } from "./lib/firebase";
 
 enum OperationType {
@@ -92,8 +96,30 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [user, setUser] = useState<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // Auth Initialization
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (u) {
+        console.log("Authenticated as:", u.uid);
+        setUser(u);
+      } else {
+        signInAnonymously(auth).catch(err => {
+          if (err.code === 'auth/admin-restricted-operation') {
+            console.error("CRITICAL: Anonymous Authentication is disabled in Firebase Console. Please enable it under Authentication > Sign-in method.");
+            // We don't set user, but we don't block the UI yet.
+            // We will show a clear error only if a write operation fails.
+          } else {
+            console.error("Auth error:", err);
+          }
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   const [deviceInfo, setDeviceInfo] = useState("");
   useEffect(() => {
     const parser = new UAParser();
@@ -143,7 +169,8 @@ export default function App() {
           }
         }
       }, (error) => {
-        handleFirestoreError(error, OperationType.GET, path);
+        // If we get an error here, it might be due to missing auth or rules
+        console.warn("State listener error:", error);
       });
     }
     return () => unsubscribe && unsubscribe();
@@ -160,85 +187,119 @@ export default function App() {
     }
   }, []);
 
-  const handleUpload = async (file: File) => {
-    setState("UPLOADING");
-    setRole("SENDER");
-    setUploadProgress(0);
-    setErrorMsg("");
+    const handleUpload = async (file: File) => {
+      // Set state early so user sees "Relaying..."
+      setState("UPLOADING");
+      setRole("SENDER");
+      setUploadProgress(0);
+      setErrorMsg("");
 
-    try {
-      const fileId = uuidv4();
-      const storagePath = `uploads/${fileId}-${file.name}`;
-      const storageRef = ref(storage, storagePath);
-      const uploadTask = uploadBytesResumable(storageRef, file);
+      console.log("Relay initiated for:", file.name, "Size:", file.size);
 
-      uploadTask.on(
-        "state_changed",
-        (snapshot) => {
-          const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-          setUploadProgress(progress);
-        },
-        (error) => {
-          console.error("Storage upload error", error);
-          setState("ERROR");
-          setErrorMsg("Upload failed. Storage quota might be exceeded.");
-        },
-        async () => {
-          // Success
-          // Generate Pin
-          let pin = "";
-          let isUnique = false;
-          let attempts = 0;
-          
-          while (!isUnique && attempts < 5) {
-            pin = Math.floor(100000 + Math.random() * 900000).toString();
-            const pinRef = doc(db, "files", pin);
-            const pinSnap = await getDoc(pinRef).catch(err => handleFirestoreError(err, OperationType.GET, `files/${pin}`));
-            if (!pinSnap.exists()) {
-              isUnique = true;
-            }
-            attempts++;
-          }
-
-          if (!isUnique) {
-            setState("ERROR");
-            setErrorMsg("Could not generate a unique PIN. Please try again.");
-            return;
-          }
-
-          const fileData = {
-            id: fileId,
-            pin,
-            originalName: file.name,
-            mimeType: file.type || "application/octet-stream",
-            size: file.size,
-            storagePath: storagePath,
-            expiry: Date.now() + 10 * 60 * 1000,
-            status: "active",
-            createdAt: serverTimestamp(),
-          };
-
-          const docPath = `files/${pin}`;
-          try {
-            await setDoc(doc(db, "files", pin), fileData);
-            setFileInfo({
-              pin: fileData.pin,
-              fileName: fileData.originalName,
-              size: fileData.size,
-              expiry: fileData.expiry,
-              mimeType: fileData.mimeType
-            });
-            setState("UPLOADED");
-          } catch (err) {
-            handleFirestoreError(err, OperationType.CREATE, docPath);
+      // Check for auth
+      if (!auth.currentUser) {
+        console.log("Authenticating anonymously...");
+        try {
+          await signInAnonymously(auth);
+          console.log("Auth successful:", auth.currentUser?.uid);
+        } catch (e: any) {
+          console.error("Auth failed during upload:", e);
+          if (e.code === 'auth/admin-restricted-operation') {
+             setState("ERROR");
+             setErrorMsg("Anonymous Auth is disabled. Please enable it in the Firebase Console (Authentication > Sign-in method).");
+             return;
           }
         }
-      );
-    } catch (err) {
-      setState("ERROR");
-      setErrorMsg("Something went wrong with the relay.");
-    }
-  };
+      }
+
+      try {
+        const fileId = uuidv4();
+        const storagePath = `uploads/${fileId}-${file.name}`;
+        const storageRef = ref(storage, storagePath);
+        
+        console.log("Starting storage upload to:", storagePath);
+        const uploadTask = uploadBytesResumable(storageRef, file);
+
+        uploadTask.on(
+          "state_changed",
+          (snapshot) => {
+            const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+            setUploadProgress(progress);
+          },
+          (error: any) => {
+            console.error("Storage upload failed detail:", error);
+            setState("ERROR");
+            if (error.code === 'storage/unauthorized') {
+              setErrorMsg("Upload denied: Security rules blocked access. Please check your Storage Rules.");
+            } else {
+              setErrorMsg(`Upload failed: ${error.message || error.code}`);
+            }
+          },
+          async () => {
+            console.log("Storage upload complete. Creating Firestore record...");
+            let pin = "";
+            let isUnique = false;
+            let attempts = 0;
+            
+            while (!isUnique && attempts < 5) {
+              pin = Math.floor(100000 + Math.random() * 900000).toString();
+              const pinRef = doc(db, "files", pin);
+              try {
+                const pinSnap = await getDoc(pinRef);
+                if (!pinSnap.exists()) {
+                  isUnique = true;
+                }
+              } catch (err: any) {
+                console.error("PIN check failed:", err);
+                // If it's a permission error on getDoc, it might be serious
+              }
+              attempts++;
+            }
+
+            if (!isUnique) {
+              setState("ERROR");
+              setErrorMsg("Relay collision: Could not generate a unique PIN. Try again.");
+              return;
+            }
+
+            const fileData = {
+              id: fileId,
+              pin,
+              originalName: file.name,
+              mimeType: file.type || "application/octet-stream",
+              size: file.size,
+              storagePath: storagePath,
+              expiry: Date.now() + 10 * 60 * 1000,
+              status: "active",
+              createdAt: serverTimestamp(),
+            };
+
+            const docPath = `files/${pin}`;
+            try {
+              console.log("Writing to Firestore:", docPath);
+              await setDoc(doc(db, "files", pin), fileData);
+              setFileInfo({
+                pin: fileData.pin,
+                fileName: fileData.originalName,
+                size: fileData.size,
+                expiry: fileData.expiry,
+                mimeType: fileData.mimeType
+              });
+              setState("UPLOADED");
+              console.log("Relay ready at PIN:", pin);
+            } catch (err: any) {
+              console.error("Firestore write failed:", err);
+              setState("ERROR");
+              setErrorMsg(`Vault registration failed: ${err.message || err.code}`);
+            }
+          }
+        );
+      } catch (err: any) {
+        console.error("General relay error:", err);
+        setState("ERROR");
+        setErrorMsg("The relay system encountered an internal disruption.");
+      }
+    };
 
   const handleFetchInfo = async (pinOverride?: string) => {
     const pin = pinOverride || receiverPin;
