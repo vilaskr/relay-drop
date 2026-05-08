@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { QRCodeCanvas } from "qrcode.react";
 import { UAParser } from "ua-parser-js";
 
-type AppState = "IDLE" | "UPLOADING" | "UPLOADED" | "DOWNLOADING" | "ERROR" | "DELIVERED" | "RECEIVER_PREVIEW";
+type AppState = "IDLE" | "UPLOADING" | "UPLOADED" | "LOCATING" | "ERROR" | "DELIVERED" | "RECEIVER_PREVIEW" | "DOWNLOADING";
 
 interface FileInfo {
   pin: string;
@@ -22,6 +22,7 @@ interface FileInfo {
 export default function App() {
   const [state, setState] = useState<AppState>("IDLE");
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
   const [receiverPin, setReceiverPin] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -57,21 +58,28 @@ export default function App() {
     }
   }, [fileInfo?.expiry, state]);
 
-  // Status Polling for Uploader
+  // Status Polling (Uploader and Receiver)
   useEffect(() => {
     let interval: number;
-    if (state === "UPLOADED" && fileInfo) {
+    if ((state === "UPLOADED" || state === "RECEIVER_PREVIEW") && fileInfo) {
       interval = setInterval(async () => {
         try {
           const res = await fetch(`/api/status/${fileInfo.pin}`);
           const data = await res.json();
+          
           if (data.status === "downloaded") {
-            setState("DELIVERED");
+            if (state === "UPLOADED") {
+              setState("DELIVERED");
+            } else if (state === "RECEIVER_PREVIEW") {
+              // If receiver saw it was downloaded by someone else (unlikely but possible)
+              // Or just to confirm completion after they started.
+              // Actually, if they are downloading, we might handle it in startDownload.
+            }
             clearInterval(interval);
-            setTimeout(() => setState("IDLE"), 5000);
           } else if (data.status === "not_found") {
              if (state !== "DELIVERED") {
-                setState("IDLE");
+                setState("ERROR");
+                setErrorMsg("This relay is no longer available.");
                 setFileInfo(null);
              }
              clearInterval(interval);
@@ -144,7 +152,7 @@ export default function App() {
       return;
     }
 
-    setState("DOWNLOADING");
+    setState("LOCATING");
     setErrorMsg("");
 
     try {
@@ -164,15 +172,60 @@ export default function App() {
     }
   };
 
-  const startDownload = () => {
+  const startDownload = async () => {
     if (!fileInfo) return;
-    window.location.href = `/api/download/${fileInfo.pin}`;
-    // Return to idle after a moment
-    setTimeout(() => {
-      setState("IDLE");
-      setFileInfo(null);
-      setReceiverPin("");
-    }, 2000);
+    
+    setState("DOWNLOADING");
+    setUploadProgress(0);
+    setErrorMsg("");
+
+    try {
+      const response = await fetch(`/api/download/${fileInfo.pin}`);
+      if (!response.ok) throw new Error("Download failed");
+      
+      const contentLength = response.headers.get("content-length");
+      const total = contentLength ? parseInt(contentLength, 10) : 0;
+      let loaded = 0;
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Could not read response body");
+
+      const chunks: Uint8Array[] = [];
+      
+      while(true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        chunks.push(value);
+        loaded += value.length;
+        
+        if (total > 0) {
+          setUploadProgress(Math.round((loaded / total) * 100));
+        }
+      }
+
+      const blob = new Blob(chunks, { type: fileInfo.mimeType });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileInfo.fileName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      setState("DELIVERED");
+      
+      setTimeout(() => {
+        setState("IDLE");
+        setFileInfo(null);
+        setReceiverPin("");
+      }, 5000);
+
+    } catch (err) {
+      setState("ERROR");
+      setErrorMsg("Download failed. The relay might have been closed.");
+    }
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
@@ -395,15 +448,17 @@ export default function App() {
               </motion.div>
             )}
 
-            {state === "UPLOADING" && (
+            {(state === "UPLOADING" || state === "DOWNLOADING") && (
               <motion.div
-                key="uploading"
+                key="transferring"
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 className="brutal-card bg-white space-y-10"
               >
                 <div className="flex flex-wrap justify-between items-end gap-2">
-                  <h2 className="text-3xl sm:text-5xl font-black uppercase">Relaying...</h2>
+                  <h2 className="text-3xl sm:text-5xl font-black uppercase">
+                    {state === "UPLOADING" ? "Relaying..." : "Receiving..."}
+                  </h2>
                   <span className="text-3xl sm:text-5xl font-black">{uploadProgress}%</span>
                 </div>
                 <div className="h-12 sm:h-16 w-full bg-brand-black border-4 border-black rounded-lg overflow-hidden relative">
@@ -413,7 +468,9 @@ export default function App() {
                     className="h-full bg-brand-yellow border-r-4 border-black transition-all duration-300"
                   />
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <p className="font-black mix-blend-difference text-white uppercase text-sm tracking-tighter">Transferring Bytes</p>
+                    <p className="font-black mix-blend-difference text-white uppercase text-sm tracking-tighter">
+                      {state === "UPLOADING" ? "Transferring Bytes" : "Streaming Bytes"}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center justify-center gap-3 text-brand-red font-black uppercase animate-pulse">
@@ -554,9 +611,9 @@ export default function App() {
               </motion.div>
             )}
 
-            {state === "DOWNLOADING" && (
+            {state === "LOCATING" && (
               <motion.div
-                key="downloading"
+                key="locating"
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 className="brutal-card p-12 bg-white text-center space-y-8"
