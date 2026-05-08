@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import { 
   Upload, Download, Timer, CheckCircle, AlertCircle, 
   Loader2, ArrowRight, FileText, 
-  Image as ImageIcon, Film, Smartphone, Copy, Check, Globe
+  Image as ImageIcon, Film, Smartphone, Copy, Check, Globe,
+  FileSpreadsheet, Archive, Music, FileCode
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { QRCodeCanvas } from "qrcode.react";
@@ -209,7 +210,7 @@ export default function App() {
 
   const renderFilePreview = () => {
     if (!fileInfo) return null;
-    const { mimeType } = fileInfo;
+    const { mimeType, fileName } = fileInfo;
     
     let Icon = FileText;
     let label = "GENERIC FILE";
@@ -226,6 +227,43 @@ export default function App() {
     } else if (mimeType === "application/pdf") {
       label = "PDF DOCUMENT";
       color = "bg-red-200";
+    } else if (
+      mimeType?.includes("spreadsheet") || 
+      mimeType?.includes("excel") || 
+      fileName.endsWith(".csv")
+    ) {
+      Icon = FileSpreadsheet;
+      label = "SPREADSHEET";
+      color = "bg-emerald-200";
+    } else if (
+      mimeType?.includes("zip") || 
+      mimeType?.includes("compressed") || 
+      mimeType?.includes("archive") ||
+      fileName.endsWith(".rar") || 
+      fileName.endsWith(".7z")
+    ) {
+      Icon = Archive;
+      label = "ARCHIVE";
+      color = "bg-orange-200";
+    } else if (mimeType?.startsWith("audio/")) {
+      Icon = Music;
+      label = "AUDIO FILE";
+      color = "bg-pink-200";
+    } else if (
+      mimeType?.includes("javascript") || 
+      mimeType?.includes("typescript") || 
+      mimeType?.includes("html") || 
+      mimeType?.includes("css") || 
+      mimeType?.includes("json") ||
+      fileName.endsWith(".ts") ||
+      fileName.endsWith(".tsx") ||
+      fileName.endsWith(".js") ||
+      fileName.endsWith(".jsx") ||
+      fileName.endsWith(".py")
+    ) {
+      Icon = FileCode;
+      label = "SOURCE CODE";
+      color = "bg-cyan-200";
     }
 
     return (

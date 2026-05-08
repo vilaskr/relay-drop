@@ -17,6 +17,12 @@ const PORT = 3000;
 app.use(cors());
 app.use(express.json());
 
+// HSTS Header Middleware
+app.use((req, res, next) => {
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  next();
+});
+
 // In-memory store for file metadata
 interface RelayFile {
   id: string;
