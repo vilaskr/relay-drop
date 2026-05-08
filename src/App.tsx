@@ -8,6 +8,69 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { QRCodeCanvas } from "qrcode.react";
 import { UAParser } from "ua-parser-js";
+import { v4 as uuidv4 } from "uuid";
+import { 
+  doc, 
+  setDoc, 
+  getDoc, 
+  updateDoc, 
+  onSnapshot,
+  serverTimestamp,
+  getDocFromServer
+} from "firebase/firestore";
+import { 
+  ref, 
+  uploadBytesResumable, 
+  getDownloadURL 
+} from "firebase/storage";
+import { db, storage, auth } from "./lib/firebase";
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 type AppState = "IDLE" | "UPLOADING" | "UPLOADED" | "LOCATING" | "ERROR" | "DELIVERED" | "RECEIVER_PREVIEW" | "DOWNLOADING";
 
@@ -59,38 +122,31 @@ export default function App() {
     }
   }, [fileInfo?.expiry, state]);
 
-  // Status Polling (Uploader and Receiver)
+  // Status Polling (Uploader and Receiver) - Migrated to Firestore Real-time Listeners
   useEffect(() => {
-    let interval: number;
+    let unsubscribe: () => void;
     if ((state === "UPLOADED" || state === "RECEIVER_PREVIEW") && fileInfo) {
-      interval = setInterval(async () => {
-        try {
-          const res = await fetch(`/api/status/${fileInfo.pin}`);
-          const data = await res.json();
-          
+      const path = `files/${fileInfo.pin}`;
+      unsubscribe = onSnapshot(doc(db, "files", fileInfo.pin), (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
           if (data.status === "downloaded") {
             if (state === "UPLOADED") {
               setState("DELIVERED");
-            } else if (state === "RECEIVER_PREVIEW") {
-              // If receiver saw it was downloaded by someone else (unlikely but possible)
-              // Or just to confirm completion after they started.
-              // Actually, if they are downloading, we might handle it in startDownload.
             }
-            clearInterval(interval);
-          } else if (data.status === "not_found") {
-             if (state !== "DELIVERED") {
-                setState("ERROR");
-                setErrorMsg("This relay is no longer available.");
-                setFileInfo(null);
-             }
-             clearInterval(interval);
           }
-        } catch (e) {
-          console.error("Polling error", e);
+        } else {
+          if (state !== "DELIVERED") {
+            setState("ERROR");
+            setErrorMsg("This relay is no longer available.");
+            setFileInfo(null);
+          }
         }
-      }, 3000) as unknown as number;
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, path);
+      });
     }
-    return () => clearInterval(interval);
+    return () => unsubscribe && unsubscribe();
   }, [state, fileInfo]);
 
   // URL PIN Handling
@@ -110,40 +166,77 @@ export default function App() {
     setUploadProgress(0);
     setErrorMsg("");
 
-    const formData = new FormData();
-    formData.append("file", file);
-
     try {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/upload", true);
+      const fileId = uuidv4();
+      const storagePath = `uploads/${fileId}-${file.name}`;
+      const storageRef = ref(storage, storagePath);
+      const uploadTask = uploadBytesResumable(storageRef, file);
 
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const progress = Math.round((e.loaded / e.total) * 100);
+      uploadTask.on(
+        "state_changed",
+        (snapshot) => {
+          const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
           setUploadProgress(progress);
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status === 200) {
-          const data = JSON.parse(xhr.responseText);
-          setFileInfo(data);
-          setState("UPLOADED");
-        } else {
+        },
+        (error) => {
+          console.error("Storage upload error", error);
           setState("ERROR");
-          setErrorMsg("Upload failed. Try again.");
+          setErrorMsg("Upload failed. Storage quota might be exceeded.");
+        },
+        async () => {
+          // Success
+          // Generate Pin
+          let pin = "";
+          let isUnique = false;
+          let attempts = 0;
+          
+          while (!isUnique && attempts < 5) {
+            pin = Math.floor(100000 + Math.random() * 900000).toString();
+            const pinRef = doc(db, "files", pin);
+            const pinSnap = await getDoc(pinRef).catch(err => handleFirestoreError(err, OperationType.GET, `files/${pin}`));
+            if (!pinSnap.exists()) {
+              isUnique = true;
+            }
+            attempts++;
+          }
+
+          if (!isUnique) {
+            setState("ERROR");
+            setErrorMsg("Could not generate a unique PIN. Please try again.");
+            return;
+          }
+
+          const fileData = {
+            id: fileId,
+            pin,
+            originalName: file.name,
+            mimeType: file.type || "application/octet-stream",
+            size: file.size,
+            storagePath: storagePath,
+            expiry: Date.now() + 10 * 60 * 1000,
+            status: "active",
+            createdAt: serverTimestamp(),
+          };
+
+          const docPath = `files/${pin}`;
+          try {
+            await setDoc(doc(db, "files", pin), fileData);
+            setFileInfo({
+              pin: fileData.pin,
+              fileName: fileData.originalName,
+              size: fileData.size,
+              expiry: fileData.expiry,
+              mimeType: fileData.mimeType
+            });
+            setState("UPLOADED");
+          } catch (err) {
+            handleFirestoreError(err, OperationType.CREATE, docPath);
+          }
         }
-      };
-
-      xhr.onerror = () => {
-        setState("ERROR");
-        setErrorMsg("Network error occurred.");
-      };
-
-      xhr.send(formData);
+      );
     } catch (err) {
       setState("ERROR");
-      setErrorMsg("Something went wrong.");
+      setErrorMsg("Something went wrong with the relay.");
     }
   };
 
@@ -158,20 +251,40 @@ export default function App() {
     setRole("RECEIVER");
     setErrorMsg("");
 
+    const path = `files/${pin}`;
     try {
-      const res = await fetch(`/api/info/${pin}`);
-      if (res.ok) {
-        const info = await res.json();
-        setFileInfo({ ...info, pin });
+      const docRef = doc(db, "files", pin);
+      const docSnap = await getDoc(docRef);
+
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        
+        if (data.status === "downloaded") {
+           setState("ERROR");
+           setErrorMsg("This relay has already been delivered.");
+           return;
+        }
+
+        if (Date.now() > data.expiry) {
+           setState("ERROR");
+           setErrorMsg("This relay has expired.");
+           return;
+        }
+
+        setFileInfo({
+          pin: data.pin,
+          fileName: data.originalName,
+          size: data.size,
+          expiry: data.expiry,
+          mimeType: data.mimeType,
+        });
         setState("RECEIVER_PREVIEW");
       } else {
-        const data = await res.json();
         setState("ERROR");
-        setErrorMsg(data.error || "File not found or expired.");
+        setErrorMsg("Relay not found. Check PIN and try again.");
       }
     } catch (err) {
-      setState("ERROR");
-      setErrorMsg("Failed to connect to server.");
+      handleFirestoreError(err, OperationType.GET, path);
     }
   };
 
@@ -182,8 +295,19 @@ export default function App() {
     setUploadProgress(0);
     setErrorMsg("");
 
+    const path = `files/${fileInfo.pin}`;
     try {
-      const response = await fetch(`/api/download/${fileInfo.pin}`);
+      // 1. Get Storage Ref
+      const docRef = doc(db, "files", fileInfo.pin);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) throw new Error("Relay not found");
+      const data = docSnap.data();
+      
+      const storageRef = ref(storage, data.storagePath);
+      const downloadUrl = await getDownloadURL(storageRef);
+
+      // 2. Stream download to show progress (standard fetch can do this)
+      const response = await fetch(downloadUrl);
       if (!response.ok) throw new Error("Download failed");
       
       const contentLength = response.headers.get("content-length");
@@ -207,6 +331,7 @@ export default function App() {
         }
       }
 
+      // 3. Trigger Save
       const blob = new Blob(chunks, { type: fileInfo.mimeType });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -217,18 +342,28 @@ export default function App() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-    setState("DELIVERED");
-    
-    setTimeout(() => {
-      setState("IDLE");
-      setRole(null);
-      setFileInfo(null);
-      setReceiverPin("");
-    }, 5000);
+      // 4. Mark as downloaded in Firestore
+      try {
+        await updateDoc(doc(db, "files", fileInfo.pin), {
+          status: "downloaded"
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, path);
+      }
+
+      setState("DELIVERED");
+      
+      setTimeout(() => {
+        setState("IDLE");
+        setRole(null);
+        setFileInfo(null);
+        setReceiverPin("");
+      }, 5000);
 
     } catch (err) {
+      console.error("Download Error:", err);
       setState("ERROR");
-      setErrorMsg("Download failed. The relay might have been closed.");
+      setErrorMsg("Download failed. The relay might have been closed or storage restricted.");
     }
   };
 

@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() == 6 && id.matches('^[0-9]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Helper for RelayFile validation
+    function isValidRelayFile(data) {
+      return data.keys().hasAll(['id', 'pin', 'originalName', 'mimeType', 'size', 'storagePath', 'expiry', 'status', 'createdAt']) &&
+             data.keys().size() == 9 &&
+             data.id is string &&
+             data.pin is string && data.pin.size() == 6 &&
+             data.originalName is string && data.originalName.size() <= 255 &&
+             data.mimeType is string &&
+             data.size is number && data.size > 0 &&
+             data.storagePath is string &&
+             data.expiry is number &&
+             data.status in ['active', 'downloaded'] &&
+             data.createdAt == request.time;
+    }
+
+    match /files/{pin} {
+      // Create: Anyone can upload (or maybe restrict to authenticated users if needed, but Relay is often low-barrier)
+      // For now, let's allow anyone to create if they follow the schema.
+      allow create: if isValidId(pin) && isValidRelayFile(incoming()) && incoming().pin == pin;
+
+      // Get/List: Anyone with the PIN can read the metadata
+      allow get: if true; 
+      
+      // Update: Only allowed to mark as downloaded once
+      allow update: if (
+        existing().status == 'active' &&
+        incoming().status == 'downloaded' &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status']) &&
+        incoming().id == existing().id &&
+        incoming().pin == existing().pin &&
+        incoming().storagePath == existing().storagePath
+      );
+
+      // Delete: Only if expired or system? 
+      // Actually, let's allow client to delete if they are the one who marked it downloaded?
+      // Or just let it expire. For "one-time" download, we just mark status.
+      allow delete: if false; // System handles cleanup or we delete after status change on server (if we have one)
+    }
+  }
+}
