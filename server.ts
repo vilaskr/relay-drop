@@ -17,12 +17,6 @@ const PORT = 3000;
 app.use(cors());
 app.use(express.json());
 
-// HSTS Header Middleware
-app.use((req, res, next) => {
-  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
-  next();
-});
-
 // In-memory store for file metadata
 interface RelayFile {
   id: string;
@@ -38,15 +32,15 @@ interface RelayFile {
 const relayStore = new Map<string, RelayFile>(); // PIN -> RelayFile
 
 // Ensure uploads directory exists
-const uploadDir = path.join(process.cwd(), "uploads");
+const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+  fs.mkdirSync(uploadDir);
 }
 
 // Multer setup
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, uploadDir);
+    cb(null, "uploads/");
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
