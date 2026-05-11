@@ -1,26 +1,47 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  
+  --color-brand-bg: #F5E9D8;
+  --color-brand-red: #C93C2D;
+  --color-brand-yellow: #F7D774;
+  --color-brand-white: #FFFDF8;
+  --color-brand-black: #111111;
+
+  --shadow-brutal: 8px 8px 0px #111;
+  --shadow-brutal-hover: 4px 4px 0px #111;
 }
 
-:root {
-  --background: #ffffff;
-  --foreground: #000000;
-  --accent: #ff3e00;
+@layer base {
+  body {
+    @apply bg-brand-bg text-brand-black font-sans min-h-screen relative overflow-x-hidden;
+    background-image: 
+      linear-gradient(to right, rgba(17, 17, 17, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(17, 17, 17, 0.05) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
 }
 
-body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans);
-}
+@layer components {
+  /* Floating Shapes */
+  .doodle-shape {
+    @apply absolute -z-10 opacity-10;
+  }
 
-.neo-brutalist-card {
-  @apply border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all;
-}
+  .brutal-card {
+    @apply bg-white border-4 border-brand-black rounded-lg shadow-brutal p-5 sm:p-10;
+  }
 
-.neo-brutalist-button {
-  @apply border-4 border-black bg-white px-6 py-2 font-bold shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none transition-all;
+  .brutal-button {
+    @apply border-4 border-brand-black rounded-lg shadow-brutal font-bold transition-all duration-200 
+    active:translate-x-[4px] active:translate-y-[4px] active:shadow-brutal-hover 
+    hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[6px_6px_0px_#111]
+    flex items-center justify-center text-center px-6 py-3;
+  }
+
+  .brutal-input {
+    @apply bg-brand-white border-4 border-brand-black rounded-lg p-4 font-bold focus:outline-none focus:ring-4 focus:ring-brand-red/20 transition-all w-full;
+  }
 }
