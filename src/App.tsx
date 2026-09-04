@@ -624,6 +624,11 @@ export default function App() {
                <div className="w-1.5 h-1.5 bg-black rounded-full" />
                <span>Ephemeral</span>
              </div>
+             <div id="footer-credits" className="inline-flex items-center gap-2 font-black uppercase text-xs sm:text-sm tracking-wider px-4 py-1.5 border-2 border-black bg-white shadow-[3px_3px_0px_#000]">
+               <span className="text-black/60">Credits</span>
+               <span className="w-1 h-1 bg-black rounded-full" />
+               <span className="text-black font-black">VILAS K R</span>
+             </div>
              <p className="font-black text-xs opacity-20">EST. 2026 • RELAY SYSTEMS INC.</p>
           </div>
         </footer>

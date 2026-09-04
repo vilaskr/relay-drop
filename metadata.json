@@ -2,5 +2,7 @@
   "name": "Relay",
   "description": "A minimal neo-brutalist temporary file sharing tool. Upload a file, get 6-digit PIN, download instantly. Files expire in 10 minutes.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
